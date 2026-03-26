@@ -11,6 +11,7 @@ Please discuss in an [issue](https://github.com/zjunlp/EasyEdit/issues) a featur
 
 - [Data](#data)
 - [Edit llama2 on ZsRE](#edit-llama2-on-zsre)
+- [HopEdit setup](#hopedit-setup)
   - [ROME](#rome)
   - [MEMIT](#memit)
   - [FT-L](#ft)
@@ -163,4 +164,26 @@ python run_zsre_llama2.py \
   journal={arXiv preprint arXiv:2305.13172},
   year={2023}
 }
+```
+
+## HopEdit setup
+
+```shell
+conda create -n easyedit-hopedit python=3.10
+conda activate easyedit-hopedit
+pip install -r requirements.txt
+```
+
+If your cluster requires a CUDA-specific PyTorch build, reinstall `torch` after the requirements step.
+
+HopEdit example:
+
+```shell
+cd /scratch/xiaobing/EasyEdit
+/home/xiaobing/anaconda3/envs/easyedit-hopedit/bin/python examples/run_hopedit_editing.py \
+    --hparams_dir hparams/HOPEDIT/qwen3-8b-base.yaml \
+    --data_dir /path/to/editing-data \
+    --data_type ZsRE \
+    --ds_size 3 \
+    --sequential_edit
 ```

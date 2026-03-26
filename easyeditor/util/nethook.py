@@ -68,7 +68,14 @@ class Trace(contextlib.AbstractContextManager):
         if layer is not None:
             module = get_module(module, layer)
 
-        def retain_hook(m, inputs, output, kwargs=None):
+        def retain_hook(m, inputs, kwargs_or_output=None, output=None):
+            # PyTorch 2.x with_kwargs hooks call hook(module, args, kwargs, output).
+            # Older hooks call hook(module, args, output). Normalize both forms here.
+            if output is None:
+                kwargs = None
+                output = kwargs_or_output
+            else:
+                kwargs = kwargs_or_output
             if retain_input:
                 # Try to get input from positional args first
                 if len(inputs) > 0:
@@ -114,7 +121,7 @@ class Trace(contextlib.AbstractContextManager):
         except TypeError:
             # Fallback for older PyTorch versions - wrap the hook to ignore kwargs parameter
             def legacy_hook(m, inputs, output):
-                return retain_hook(m, inputs, output, kwargs=None)
+                return retain_hook(m, inputs, output)
             self.registered_hook = module.register_forward_hook(legacy_hook)
         self.stop = stop
 

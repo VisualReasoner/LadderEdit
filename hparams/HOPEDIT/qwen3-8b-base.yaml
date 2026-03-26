@@ -1,0 +1,29 @@
+alg_name: HOPEDIT
+model_name: Qwen/Qwen3-8B-Base
+device: 0
+model_parallel: false
+batch_size: 1
+max_length: 512
+use_chat_template: false
+fp16: false
+bf16: true
+
+rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+num_steps: 8
+lr: 5.0e-4
+weight_decay: 0.0
+
+top_k: 4
+beta: 8.0
+semantic_weight: 0.7
+activation_weight: 0.3
+probe_layer: 16
+route_log_dir: ./outputs/hopedit
+save_path: null

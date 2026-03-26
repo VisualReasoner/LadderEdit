@@ -77,7 +77,27 @@ def tokenize(batch, tokenizer, device, context_templates=None, hparams=None):
     len_temp = len(context_templates)
     prompts = [item['prompt'] for item in batch]
     labels = [item['target_new'] for item in batch]
-    loc_prompts = [item['loc_prompt'] for item in batch]
+    loc_prompts = []
+    for item in batch:
+        if 'loc_prompt' in item and item['loc_prompt'] is not None:
+            loc_prompts.append(item['loc_prompt'])
+            continue
+        locality = item.get('locality', {})
+        neighborhood = locality.get('neighborhood', {}) if isinstance(locality, dict) else {}
+        locality_prompt = neighborhood.get('prompt')
+        locality_ground_truth = neighborhood.get('ground_truth')
+        if isinstance(locality_prompt, list):
+            locality_prompt = locality_prompt[0] if locality_prompt else None
+        if isinstance(locality_ground_truth, list):
+            locality_ground_truth = locality_ground_truth[0] if locality_ground_truth else None
+        if locality_prompt is not None and locality_ground_truth is not None:
+            loc_prompts.append(f"{locality_prompt} {locality_ground_truth}")
+        elif locality_prompt is not None:
+            loc_prompts.append(locality_prompt)
+        elif item.get('subject') is not None:
+            loc_prompts.append(item['subject'])
+        else:
+            loc_prompts.append(item['prompt'])
 
     mask_token = -100  # ignore_index of CrossEntropyLoss
     if hasattr(hparams, 'use_chat_template') and hparams.use_chat_template:
@@ -118,9 +138,10 @@ def tokenize(batch, tokenizer, device, context_templates=None, hparams=None):
                 if start_idx is None:
                     start_idx = find_sublist_start_index(token.detach().cpu().numpy().tolist(), subject_token1)
                     subject_length = len(subject_token1)
-                act_mask[j][start_idx: start_idx + subject_length] = 1
-                deact_mask[j][:start_idx] = 1
-                deact_mask[j][start_idx + subject_length:] = 1
+                if start_idx is not None:
+                    act_mask[j][start_idx: start_idx + subject_length] = 1
+                    deact_mask[j][:start_idx] = 1
+                    deact_mask[j][start_idx + subject_length:] = 1
         else:  # General Editing
             act_mask = None
             deact_mask = None
@@ -464,4 +485,3 @@ def get_context_templates(model, tok, length_params, device):
         # print(f"Cached context templates {CONTEXT_TEMPLATES_CACHE}")
 
     return CONTEXT_TEMPLATES_CACHE
-

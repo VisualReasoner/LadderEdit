@@ -35,6 +35,70 @@ def compute_z(
 
     print("Computing right vector (v)")
 
+    def _unwrap_tensor_output(output):
+        if isinstance(output, torch.Tensor):
+            return output, None
+        if isinstance(output, dict):
+            preferred_keys = ("hidden_states", "last_hidden_state")
+            for key in preferred_keys:
+                value = output.get(key)
+                if isinstance(value, torch.Tensor):
+                    return value, ("dict", key, output)
+            for key, value in output.items():
+                if isinstance(value, torch.Tensor):
+                    return value, ("dict", key, output)
+            raise TypeError(
+                f"Unsupported dict layer output keys {list(output.keys())} encountered in MEMIT."
+            )
+        if isinstance(output, (list, tuple)):
+            if len(output) == 0:
+                raise ValueError("Layer output container is empty.")
+            return output[0], ("seq", output)
+        raise TypeError(
+            f"Unsupported layer output type {type(output)} encountered in MEMIT."
+        )
+
+    def _rewrap_tensor_output(updated, container):
+        if container is None:
+            return updated
+        container_type = container[0]
+        if container_type == "dict":
+            _, key, original = container
+            original[key] = updated
+            return original
+        if container_type == "seq":
+            original = container[1]
+            new_out = list(original)
+            new_out[0] = updated
+            return type(original)(new_out) if isinstance(original, tuple) else new_out
+        raise TypeError(f"Unsupported output container descriptor {container_type} in MEMIT.")
+
+    def _slice_at_lookup(output, example_idx, token_idx):
+        if output.dim() != 3:
+            raise ValueError(f"Expected 3D hidden states in MEMIT, got shape {tuple(output.shape)}")
+        batch_size = len(lookup_idxs)
+        if output.shape[0] == batch_size:
+            return output[example_idx, token_idx, :]
+        if output.shape[1] == batch_size:
+            return output[token_idx, example_idx, :]
+        raise ValueError(
+            f"Could not align MEMIT hidden states with batch size {batch_size}: shape={tuple(output.shape)}"
+        )
+
+    def _add_delta_at_lookup(output, example_idx, token_idx, delta_value):
+        if output.dim() != 3:
+            raise ValueError(f"Expected 3D hidden states in MEMIT, got shape {tuple(output.shape)}")
+        batch_size = len(lookup_idxs)
+        if output.shape[0] == batch_size:
+            output[example_idx, token_idx, :] += delta_value
+            return
+        if output.shape[1] == batch_size:
+            output[token_idx, example_idx, :] += delta_value
+            return
+        raise ValueError(
+            f"Could not align MEMIT hidden states with batch size {batch_size}: shape={tuple(output.shape)}"
+        )
+
     # Tokenize target into list of int token IDs
     target_ids = tok.encode(request["target_new"], return_tensors="pt", add_special_tokens=False).to(f"cuda:{hparams.device}")[0]
 
@@ -90,49 +154,20 @@ def compute_z(
     def edit_output_fn(cur_out, cur_layer):
         nonlocal target_init
 
-        def _unwrap_output(output):
-            if isinstance(output, torch.Tensor):
-                return output, None
-            if isinstance(output, (list, tuple)):
-                if len(output) == 0:
-                    raise ValueError("Layer output container is empty.")
-                return output[0], output
-            raise TypeError(
-                f"Unsupported layer output type {type(output)} encountered in MEMIT."
-            )
-
-        def _rewrap_output(updated, original):
-            if original is None:
-                return updated
-            if isinstance(original, list):
-                new_out = list(original)
-            elif isinstance(original, tuple):
-                new_out = list(original)
-            else:
-                raise TypeError(
-                    f"Unsupported layer output container {type(original)} in MEMIT."
-                )
-            new_out[0] = updated
-            return type(original)(new_out) if isinstance(original, tuple) else new_out
-
         if cur_layer == hparams.layer_module_tmp.format(layer):
-            layer_output, original_container = _unwrap_output(cur_out)
+            layer_output, original_container = _unwrap_tensor_output(cur_out)
 
             # Store initial value of the vector of interest
             if target_init is None:
                 print("Recording initial value of v*")
                 # Initial value is recorded for the clean sentence
-                target_init = layer_output[0, lookup_idxs[0]].detach().clone()
+                target_init = _slice_at_lookup(layer_output, 0, lookup_idxs[0]).detach().clone()
 
             # Add intervened delta
             for i, idx in enumerate(lookup_idxs):
+                _add_delta_at_lookup(layer_output, i, idx, delta)
 
-                if len(lookup_idxs)!=layer_output.shape[0]:
-                    layer_output[idx, i, :] += delta
-                else:
-                    layer_output[i, idx, :] += delta
-
-            return _rewrap_output(layer_output, original_container)
+            return _rewrap_tensor_output(layer_output, original_container)
 
         return cur_out
 
@@ -171,10 +206,7 @@ def compute_z(
         # Compute loss on rewriting targets
 
         loss_layer_out = tr[hparams.layer_module_tmp.format(loss_layer)].output
-        if isinstance(loss_layer_out, (list, tuple)):
-            output = loss_layer_out[0]
-        else:
-            output = loss_layer_out
+        output, _ = _unwrap_tensor_output(loss_layer_out)
 
         if output.shape[1]!=rewriting_targets.shape[1]:
             output=torch.transpose(output, 0, 1)

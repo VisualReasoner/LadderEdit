@@ -18,7 +18,7 @@ class SimIE:
         self.device = f"cuda:{device}"
         self.init_weights_copy = {n: p.clone().cpu() for n, p in init_weights.items()}
         self.weights_copy = {n: p.clone().cpu() for n, p in init_weights.items()}
-        if "llama" in model_name.lower() or "gpt-j-6b" in model_name.lower() or "mistral" in model_name.lower():
+        if "llama" in model_name.lower() or "gpt-j-6b" in model_name.lower() or "mistral" in model_name.lower() or "qwen" in model_name.lower():
             self.matrix_P = {n: self.lamHyper * torch.eye(p.shape[1]).to(dtype=p.dtype) for n, p in init_weights.items()}
             self.transpose = False
         elif "gpt2-xl" in model_name.lower():

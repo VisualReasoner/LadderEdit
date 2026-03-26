@@ -146,6 +146,19 @@ def get_reprs_at_idxs(
                 # This should not happen with the nethook.py fix, but handle gracefully
                 return
             cur_repr = cur_repr[0]
+        elif isinstance(cur_repr, dict):
+            preferred_keys = ("hidden_states", "last_hidden_state")
+            for preferred_key in preferred_keys:
+                if isinstance(cur_repr.get(preferred_key), torch.Tensor):
+                    cur_repr = cur_repr[preferred_key]
+                    break
+            else:
+                tensor_value = next((value for value in cur_repr.values() if isinstance(value, torch.Tensor)), None)
+                if tensor_value is None:
+                    raise TypeError(
+                        f"Unsupported dict output without tensor values for {module_name}: {list(cur_repr.keys())}"
+                    )
+                cur_repr = tensor_value
         if cur_repr.shape[0]!=len(batch_idxs):
             cur_repr=cur_repr.transpose(0,1)
         for i, idx_list in enumerate(batch_idxs):

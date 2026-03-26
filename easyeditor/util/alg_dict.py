@@ -22,6 +22,7 @@ from .. models.deepedit_api import DeepEditApiHyperParams, apply_deepedit_api_to
 from ..models.dpo import DPOHyperParams, apply_dpo_to_model
 from ..models.ultraedit import UltraEditHyperParams, UltraEditRewriteExecutor
 from ..models.simie import SimIEHyperParams, apply_simie_to_model
+from ..models.hopedit import HopEditHyperParams, apply_hopedit_to_model
 
 
 ALG_DICT = {
@@ -47,7 +48,8 @@ ALG_DICT = {
     "ULTRAEDIT": UltraEditRewriteExecutor().apply_to_model,
     "CORE": apply_core_to_model,
     "DeepEdit-Api": apply_deepedit_api_to_model,
-    "SimIE": apply_simie_to_model
+    "SimIE": apply_simie_to_model,
+    "HOPEDIT": apply_hopedit_to_model
 }
 
 ALG_MULTIMODAL_DICT = {

@@ -26,3 +26,4 @@ from .ft_uns import *
 from .lora_uns import *
 from .ultraedit import *
 from .simie import *
+from .hopedit import *

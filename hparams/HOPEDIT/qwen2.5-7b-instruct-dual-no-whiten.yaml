@@ -1,0 +1,38 @@
+alg_name: HOPEDIT
+model_name: Qwen/Qwen2.5-7B-Instruct
+device: 0
+model_parallel: false
+batch_size: 1
+max_length: 512
+use_chat_template: false
+fp16: false
+bf16: true
+
+rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+num_steps: 1
+lr: 5.0e-4
+weight_decay: 0.0
+
+top_k: 4
+beta: 8.0
+semantic_weight: 0.7
+activation_weight: 0.3
+probe_layer: 16
+probe_layers:
+  - 12
+  - 16
+  - 20
+route_log_dir: ./outputs/hopedit_smoke
+min_route_prob: 0.55
+min_route_margin: 0.20
+activation_center: false
+activation_whiten: false
+key_l2_normalize: true
+save_path: null

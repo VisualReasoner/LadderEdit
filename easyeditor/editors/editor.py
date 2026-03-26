@@ -2,6 +2,7 @@ from typing import Optional, Union, List, Tuple, Dict
 from time import time
 from tqdm import tqdm
 import json
+import os
 import torch
 import numpy as np
 import random
@@ -62,7 +63,11 @@ class BaseEditor:
 
         if type(self.model_name) is str:
             device_map = 'auto' if hparams.model_parallel else None
-            torch_dtype = torch.float16 if hasattr(hparams, 'fp16') and hparams.fp16 else torch.float32
+            dtype = torch.bfloat16 if hasattr(hparams, 'bf16') and hparams.bf16 else torch.float16 if hasattr(hparams, 'fp16') and hparams.fp16 else torch.float32
+            offline_mode = os.environ.get('HF_HUB_OFFLINE', '').lower() in ['1', 'true', 'yes'] or os.environ.get('TRANSFORMERS_OFFLINE', '').lower() in ['1', 'true', 'yes']
+            tokenizer_kwargs = {
+                "local_files_only": offline_mode
+            }
             
             # QLoRA configuration
             if hparams.alg_name == 'QLoRA':
@@ -74,18 +79,20 @@ class BaseEditor:
                 )
                 model_kwargs = {
                     "quantization_config": bnb_config,
-                    "torch_dtype": torch_dtype,
-                    "device_map": {'': hparams.device}
+                    "dtype": dtype,
+                    "device_map": {'': hparams.device},
+                    "local_files_only": offline_mode
                 }
             else:
                 model_kwargs = {
-                    "torch_dtype": torch_dtype,
-                    "device_map": device_map
+                    "dtype": dtype,
+                    "device_map": device_map,
+                    "local_files_only": offline_mode
                 }
 
             if 't5' in self.model_name.lower():
                 self.model = T5ForConditionalGeneration.from_pretrained(self.model_name, **model_kwargs)
-                self.tok = T5Tokenizer.from_pretrained(self.model_name)
+                self.tok = T5Tokenizer.from_pretrained(self.model_name, **tokenizer_kwargs)
             elif 'chatglm-api' in self.model_name.lower():
                 self.model, self.tok = None, None
                 self.hparams = hparams
@@ -94,36 +101,43 @@ class BaseEditor:
                 self.model, self.tok = None, None
             elif 'gpt' in self.model_name.lower():
                 self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-                self.tok = GPT2Tokenizer.from_pretrained(self.model_name)
+                self.tok = GPT2Tokenizer.from_pretrained(self.model_name, **tokenizer_kwargs)
                 self.tok.pad_token_id = self.tok.eos_token_id
             elif 'llama' in self.model_name.lower():
                 self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, **tokenizer_kwargs)
                 self.tok.pad_token_id = self.tok.eos_token_id
             elif 'baichuan' in self.model_name.lower():
                 self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs, trust_remote_code=True)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name,trust_remote_code=True)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True, **tokenizer_kwargs)
                 self.tok.pad_token_id = self.tok.eos_token_id
             elif 'chatglm' in self.model_name.lower():
                 self.model = AutoModel.from_pretrained(self.model_name,trust_remote_code=True, **model_kwargs)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name,trust_remote_code=True)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True, **tokenizer_kwargs)
                 if 'chatglm2'in self.model_name.lower(): 
                     self.tok.unk_token_id = 64787
                 else: 
                     self.tok.pad_token_id = self.tok.eos_token_id
             elif 'internlm' in self.model_name.lower():
                 self.model = AutoModel.from_pretrained(self.model_name,trust_remote_code=True, **model_kwargs)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name,trust_remote_code=True)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True, **tokenizer_kwargs)
                 self.tok.pad_token_id = self.tok.eos_token_id
-            elif 'qwen2' in self.model_name.lower():
-                self.model = AutoModelForCausalLM.from_pretrained(self.model_name,trust_remote_code=True, torch_dtype=torch_dtype if hparams.alg_name not in ['MEND'] else torch.bfloat16, device_map=device_map)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name, eos_token='<|endoftext|>', pad_token='<|endoftext|>',unk_token='<|endoftext|>', trust_remote_code=True)
+            elif 'qwen2' in self.model_name.lower() or 'qwen3' in self.model_name.lower():
+                qwen_model_kwargs = dict(model_kwargs)
+                if hparams.alg_name in ['MEND']:
+                    qwen_model_kwargs['dtype'] = torch.bfloat16
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, trust_remote_code=True, **qwen_model_kwargs)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True, **tokenizer_kwargs)
+                if self.tok.pad_token_id is None:
+                    self.tok.pad_token_id = self.tok.eos_token_id
             elif 'qwen' in self.model_name.lower():
-                self.model = AutoModelForCausalLM.from_pretrained(self.model_name,fp32=False,trust_remote_code=True, **model_kwargs)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name, eos_token='<|endoftext|>', pad_token='<|endoftext|>',unk_token='<|endoftext|>', trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, trust_remote_code=True, **model_kwargs)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True, **tokenizer_kwargs)
+                if self.tok.pad_token_id is None:
+                    self.tok.pad_token_id = self.tok.eos_token_id
             elif 'mistral' in self.model_name.lower():
                 self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-                self.tok = AutoTokenizer.from_pretrained(self.model_name)
+                self.tok = AutoTokenizer.from_pretrained(self.model_name, **tokenizer_kwargs)
                 self.tok.pad_token_id = self.tok.eos_token_id
             else:
                 raise NotImplementedError
@@ -251,7 +265,9 @@ class BaseEditor:
             if sequential_edit:
                 self.model = edited_model
             else:
-                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE':
+                if self.alg_name == 'HOPEDIT':
+                    self.model = edited_model
+                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE' or self.alg_name == 'HOPEDIT':
                     with torch.no_grad():
                         weights_copy()
                 elif self.alg_name == 'LoRA' or self.alg_name == 'QLoRA' or self.alg_name == 'DPO':
@@ -304,6 +320,9 @@ class BaseEditor:
             for locality
         """
         eval_metric= kwargs['eval_metric'] if 'eval_metric' in kwargs.keys() else 'exact match'
+        for idx, request in enumerate(requests):
+            request.setdefault('case_id', idx)
+
         if hasattr(self.hparams, 'batch_size'):  # For Singleton Editing, bs=1
             assert self.hparams.batch_size == 1, 'Single Editing: batch_size should be set to 1'
         all_metrics = []
@@ -385,18 +404,25 @@ class BaseEditor:
         if sequential_edit:
             for i, request in enumerate(tqdm(requests, total=len(requests))):
                 edited_model, weights_copy, icl_examples = edit_func(request)
-            if self.alg_name == 'LoRA' or self.alg_name == 'QLoRA' or self.alg_name == 'DPO':
+                if self.alg_name == 'HOPEDIT':
+                    self.model = edited_model
+            if self.alg_name == 'LoRA' or self.alg_name == 'QLoRA' or self.alg_name == 'DPO' or self.alg_name == 'HOPEDIT':
                 self.model = edited_model
-            if self.alg_name == 'WISE' and hasattr(self.hparams, 'save_path') and self.hparams.save_path:
-                print("Start saving the WISE model!")
-                edited_model.save(self.hparams.save_path)
+            if self.alg_name in ['WISE', 'HOPEDIT'] and hasattr(self.hparams, 'save_path') and self.hparams.save_path:
+                print(f"Start saving the {self.alg_name} model!")
+                if hasattr(edited_model, 'save'):
+                    edited_model.save(self.hparams.save_path)
+                elif hasattr(edited_model, 'save_route_logs'):
+                    edited_model.save_route_logs(self.hparams.save_path)
             for i, request in enumerate(requests):
                 edit_evaluation(all_metrics, request, edited_model, i, test_generation, icl_examples, **kwargs)
         else:
             for i, request in enumerate(tqdm(requests, total=len(requests))):
                 edited_model, weights_copy, icl_examples = edit_func(request)
                 edit_evaluation(all_metrics, request, edited_model, i, test_generation, icl_examples, **kwargs)
-                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE':
+                if self.alg_name == 'HOPEDIT':
+                    self.model = edited_model
+                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE' or self.alg_name == 'HOPEDIT':
                     with torch.no_grad():
                         weights_copy()
                 elif self.alg_name == 'LoRA' or self.alg_name == 'QLoRA' or self.alg_name == 'DPO':
@@ -609,7 +635,9 @@ class BaseEditor:
             for i, request in enumerate(tqdm(requests, total=len(requests))):
                 edited_model, weights_copy, icl_examples = edit_func(request)
                 post_edit_results(all_results, request, edited_model, i, eval_metric, test_generation, icl_examples, **kwargs)
-                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE':
+                if self.alg_name == 'HOPEDIT':
+                    self.model = edited_model
+                if self.alg_name == 'KN' or self.alg_name == 'GRACE' or self.alg_name == 'WISE' or self.alg_name == 'HOPEDIT':
                     with torch.no_grad():
                         weights_copy()
                 elif self.alg_name == 'LoRA' or self.alg_name == 'QLoRA' or self.alg_name == 'DPO':
