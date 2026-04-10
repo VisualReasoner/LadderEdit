@@ -3,6 +3,7 @@ import json
 import os
 import random
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ if __name__ == '__main__':
     parser.add_argument('--editing_method', required=True, type=str)
     parser.add_argument('--hparams_dir', required=True, type=str)
     parser.add_argument('--data_dir', required=True, type=str)
-    parser.add_argument('--data_type', required=True, type=str, choices=['ZsRE', 'CounterFact'])
+    parser.add_argument('--data_type', required=True, type=str, choices=['ZsRE', 'CounterFact', 'WikiBigEdit'])
     parser.add_argument('--data_file', default=None, type=str)
     parser.add_argument('--output_root', default='./outputs/experiments', type=str)
     parser.add_argument('--output_dir', default=None, type=str)
@@ -117,6 +118,7 @@ if __name__ == '__main__':
     write_json(output_dir / 'run_config.json', run_config)
 
     editor = BaseEditor.from_hparams(hparams)
+    start_time = time.time()
     metrics, edited_model, _ = editor.edit(
         prompts=editor_inputs['prompts'],
         target_new=editor_inputs['target_new'],
@@ -129,6 +131,9 @@ if __name__ == '__main__':
         sequential_edit=args.sequential_edit,
         eval_metric=editor_inputs['eval_metric'],
     )
+    wall_time_seconds = time.time() - start_time
+    run_config['wall_time_seconds'] = wall_time_seconds
+    write_json(output_dir / 'run_config.json', run_config)
 
     metrics_path = output_dir / 'metrics.json'
     write_json(metrics_path, metrics)

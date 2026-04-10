@@ -5,12 +5,16 @@ from pathlib import Path
 from typing import Any
 
 METHOD_HPARAMS = {
+    'ALPHAEDIT': ('easyeditor.models.alphaedit', 'AlphaEditHyperParams'),
     'FT': ('easyeditor.models.ft', 'FTHyperParams'),
     'GRACE': ('easyeditor.models.grace', 'GraceHyperParams'),
     'HOPEDIT': ('easyeditor.models.hopedit', 'HopEditHyperParams'),
     'LORA': ('easyeditor.models.lora', 'LoRAHyperParams'),
+    'MELO': ('easyeditor.models.melo', 'MELOHyperParams'),
     'MEMIT': ('easyeditor.models.memit', 'MEMITHyperParams'),
+    'QLORA': ('easyeditor.models.qlora', 'QLoRAHyperParams'),
     'ROME': ('easyeditor.models.rome', 'ROMEHyperParams'),
+    'SERAC': ('easyeditor.models.serac', 'SERACHparams'),
     'SIMIE': ('easyeditor.models.simie', 'SimIEHyperParams'),
     'WISE': ('easyeditor.models.wise', 'WISEHyperParams'),
 }
@@ -57,6 +61,12 @@ DATASET_CANDIDATES = {
         'CounterFact/counterfact-edit.json',
         'counterfact.json',
         'counterfact/counterfact.json',
+    ],
+    'WikiBigEdit': [
+        'wikibigedit_eval_17k.json',
+        'WikiBigEdit/wikibigedit_eval_17k.json',
+        'wikibigedit/wikibigedit_eval_17k.json',
+        'wikibigedit.json',
     ],
 }
 
@@ -159,6 +169,49 @@ def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices
             })
             continue
 
+        if data_type == 'WikiBigEdit':
+            prompt = item.get('update') or item.get('prompt')
+            if prompt is None:
+                raise KeyError(f'WikiBigEdit record {source_index} is missing an update/prompt field')
+            target_new = _string_target(item.get('ans') or item.get('target_new'))
+            ground_truth = _string_target(item.get('ground_truth')) or '<|endoftext|>'
+            locality_prompt = item.get('loc') or item.get('locality')
+            locality_ground_truth = item.get('loc_ans') or item.get('locality_ans')
+
+            portability = {}
+            personas_prompt = item.get('personas') or item.get('portability_personas')
+            if personas_prompt is not None and target_new is not None:
+                portability['personas'] = {
+                    'prompt': [personas_prompt],
+                    'ground_truth': [target_new],
+                }
+            mhop_prompt = item.get('mhop') or item.get('portability_hop')
+            mhop_answer = item.get('mhop_ans') or item.get('portability_hop_ans')
+            if mhop_prompt is not None and mhop_answer is not None:
+                portability['mhop'] = {
+                    'prompt': [mhop_prompt],
+                    'ground_truth': [mhop_answer],
+                }
+
+            locality = {}
+            if locality_prompt is not None and locality_ground_truth is not None:
+                locality['locality'] = {
+                    'prompt': [locality_prompt],
+                    'ground_truth': [locality_ground_truth],
+                }
+
+            records.append({
+                'source_index': source_index,
+                'prompt': prompt,
+                'subject': item.get('subject'),
+                'rephrase_prompt': item.get('rephrase'),
+                'target_new': target_new,
+                'ground_truth': ground_truth,
+                'locality': locality,
+                'portability': portability,
+            })
+            continue
+
         raise NotImplementedError(f'Unsupported data_type: {data_type}')
 
     return records, dataset_file
@@ -173,32 +226,63 @@ def build_editor_inputs(records: list[dict[str, Any]], data_type: str):
     rephrase_values = [record.get('rephrase_prompt') for record in records]
     rephrase_prompts = rephrase_values if any(value is not None for value in rephrase_values) else None
 
-    locality_prompts = [record.get('locality_prompt') for record in records]
-    locality_answers = [record.get('locality_ground_truth') for record in records]
     locality_inputs = None
-    if any(value is not None for value in locality_prompts):
-        locality_inputs = {
-            'neighborhood': {
-                'prompt': locality_prompts,
-                'ground_truth': locality_answers,
+    if any(record.get('locality') for record in records):
+        locality_inputs = {}
+        locality_keys = sorted({key for record in records for key in (record.get('locality') or {}).keys()})
+        for key in locality_keys:
+            locality_inputs[key] = {
+                'prompt': [],
+                'ground_truth': [],
             }
-        }
+            for record in records:
+                bucket = (record.get('locality') or {}).get(key)
+                locality_inputs[key]['prompt'].append(bucket.get('prompt') if bucket is not None else None)
+                locality_inputs[key]['ground_truth'].append(bucket.get('ground_truth') if bucket is not None else None)
+    else:
+        locality_prompts = [record.get('locality_prompt') for record in records]
+        locality_answers = [record.get('locality_ground_truth') for record in records]
+        if any(value is not None for value in locality_prompts):
+            locality_inputs = {
+                'neighborhood': {
+                    'prompt': locality_prompts,
+                    'ground_truth': locality_answers,
+                }
+            }
 
-    portability_prompts = [record.get('portability_prompt') for record in records]
-    portability_answers = [record.get('portability_ground_truth') for record in records]
     portability_inputs = None
-    if any(value is not None for value in portability_prompts):
-        portability_inputs = {
-            'one_hop': {
-                'prompt': portability_prompts,
-                'ground_truth': portability_answers,
+    if any(record.get('portability') for record in records):
+        portability_inputs = {}
+        portability_keys = sorted({key for record in records for key in (record.get('portability') or {}).keys()})
+        for key in portability_keys:
+            portability_inputs[key] = {
+                'prompt': [],
+                'ground_truth': [],
             }
-        }
+            for record in records:
+                bucket = (record.get('portability') or {}).get(key)
+                portability_inputs[key]['prompt'].append(bucket.get('prompt') if bucket is not None else None)
+                portability_inputs[key]['ground_truth'].append(bucket.get('ground_truth') if bucket is not None else None)
+    else:
+        portability_prompts = [record.get('portability_prompt') for record in records]
+        portability_answers = [record.get('portability_ground_truth') for record in records]
+        if any(value is not None for value in portability_prompts):
+            portability_inputs = {
+                'one_hop': {
+                    'prompt': portability_prompts,
+                    'ground_truth': portability_answers,
+                }
+            }
 
     loc_prompts = []
     for record in records:
         locality_prompt = record.get('locality_prompt')
         locality_ground_truth = record.get('locality_ground_truth')
+        if locality_prompt is None or locality_ground_truth is None:
+            locality_bucket = (record.get('locality') or {}).get('locality')
+            if locality_bucket is not None:
+                locality_prompt = locality_bucket.get('prompt')
+                locality_ground_truth = locality_bucket.get('ground_truth')
         if isinstance(locality_prompt, list):
             locality_prompt = _first_or_none(locality_prompt)
         if isinstance(locality_ground_truth, list):
@@ -321,6 +405,8 @@ def summarize_run(metrics: list[dict[str, Any]], records: list[dict[str, Any]], 
         'post_locality_mean': mean_optional([row['post_locality_acc'] for row in per_case]),
         'post_portability_mean': mean_optional([row['post_portability_acc'] for row in per_case]),
         'mean_time': mean_optional([row['time'] for row in per_case]),
+        'wall_time_seconds': run_config.get('wall_time_seconds'),
+        'edits_per_second': None if not run_config.get('wall_time_seconds') or num_cases == 0 else float(num_cases / run_config['wall_time_seconds']),
         'early_post_rewrite_mean': early_post_rewrite,
         'late_post_rewrite_mean': late_post_rewrite,
         'early_late_gap': early_late_gap,

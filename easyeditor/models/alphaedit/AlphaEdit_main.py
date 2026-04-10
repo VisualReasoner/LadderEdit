@@ -60,14 +60,24 @@ def apply_AlphaEdit_to_model(
         print(os.path.abspath(hparams.P_loc))
         print(f"The null-space projection matrix P does not exist and now calculate.")
         W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
-        if "llama" in hparams.model_name.lower() or "gpt-j-6b" in hparams.model_name.lower():
+        if (
+            "llama" in hparams.model_name.lower()
+            or "qwen" in hparams.model_name.lower()
+            or "gpt-j-6b" in hparams.model_name.lower()
+        ):
             P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
         elif "gpt2-xl" in hparams.model_name.lower():
             P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
+        else:
+            raise NotImplementedError(
+                f"Unsupported AlphaEdit model for projection init: {hparams.model_name}"
+            )
         del W_out
         for i, layer in enumerate(hparams.layers):
             P[i,:,:] = get_project(model, tok, layer, hparams)
-        torch.save(P, "null_space_project.pt")
+        p_loc = Path(hparams.P_loc)
+        p_loc.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(P, p_loc)
         P_loaded = True
     elif P_loaded == False:
         P = torch.load(hparams.P_loc)
@@ -121,10 +131,11 @@ def execute_AlphaEdit(
         if request["target_new"][0] != " ":
             # Space required for correct tokenization
             requests[i]["target_new"] = " " + request["target_new"]
-        if '{}' not in request['prompt']:
-            assert request['subject'] in request['prompt'] or \
-                   print(f"Subject:{request['subject']} do not exist in prompt: {request['prompt']}")
-        requests[i]['prompt'] = requests[i]['prompt'].replace(requests[i]['subject'], '{}')
+        prompt = request["prompt"]
+        subject = request.get("subject")
+        if "{}" not in prompt and subject and subject in prompt:
+            prompt = prompt.replace(subject, "{}")
+        requests[i]["prompt"] = prompt
         print(
             f"Executing AlphaEdit algo for: "
             f"[{request['prompt']}] -> [{request['target_new']}]"
