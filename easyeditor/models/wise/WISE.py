@@ -544,7 +544,10 @@ class WISEAdapter(torch.nn.Module):
                     memory_retrieve_weight = self.memory_weight[i]
                     memory_weight_layer_output = F.linear(*args, memory_retrieve_weight)
                     dist = euc(original_layer_output, memory_weight_layer_output, self.config, infer=True)
-                    if dist > min_dist and dist > self.memory_mean_act[i].min_act() * self.config.act_ratio:
+                    if dist.dim() > 0:
+                        dist = dist.mean()
+                    threshold = self.memory_mean_act[i].min_act() * self.config.act_ratio
+                    if dist.item() > min_dist.item() and dist.item() > threshold:
                         layer_out = memory_weight_layer_output
                         min_dist = dist
         return layer_out

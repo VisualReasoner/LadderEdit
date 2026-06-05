@@ -128,7 +128,8 @@ def execute_AlphaEdit(
     # Update target and print info
     requests = deepcopy(requests)
     for i, request in enumerate(requests):
-        if request["target_new"][0] != " ":
+        request["target_new"] = request.get("target_new") or ""
+        if request["target_new"] and request["target_new"][0] != " ":
             # Space required for correct tokenization
             requests[i]["target_new"] = " " + request["target_new"]
         prompt = request["prompt"]

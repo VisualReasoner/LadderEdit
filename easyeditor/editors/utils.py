@@ -97,6 +97,21 @@ def _prepare_requests(prompts: Union[str, List[str]],
                     'subject': kwargs['subject'][i]
                 }
             )
+    for metadata_key in ('address_rephrase_prompt', 'relation_id', 'source_index'):
+        if metadata_key not in kwargs:
+            continue
+        metadata_values = kwargs[metadata_key]
+        if isinstance(metadata_values, (str, int, float)) or metadata_values is None:
+            metadata_values = [metadata_values,]
+        else:
+            assert len(metadata_values) == len(prompts)
+
+        for i, request in enumerate(requests):
+            request.update(
+                {
+                    metadata_key: metadata_values[i]
+                }
+            )
     if 'loc_prompts' in kwargs:
         if isinstance(kwargs['loc_prompts'], str):
             kwargs['loc_prompts'] = [kwargs['loc_prompts'],]

@@ -14,6 +14,32 @@ import time
 import regex
 import string
 
+def _supports_hopedit_metadata(model) -> bool:
+    return hasattr(model, "_select_adapter_for_inputs") and hasattr(model, "route_logs")
+
+
+def _normalize_metadata_list(metadata, expected_len: int):
+    if metadata is None:
+        return [None] * expected_len
+    if isinstance(metadata, list):
+        if len(metadata) != expected_len:
+            raise ValueError(f"Metadata count mismatch: expected {expected_len}, got {len(metadata)}")
+        return metadata
+    return [metadata for _ in range(expected_len)]
+
+
+def _coerce_text_target(value):
+    if isinstance(value, (list, tuple)):
+        filtered = [item for item in value if item is not None]
+        if not filtered:
+            return ""
+        if len(filtered) == 1:
+            return _coerce_text_target(filtered[0])
+        return " ".join(str(item) for item in filtered)
+    if value is None:
+        return ""
+    return str(value)
+
 
 def normalize_answer(s):
     def remove_articles(text):
@@ -29,7 +55,7 @@ def normalize_answer(s):
     def lower(text):
         return text.lower()
 
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    return white_space_fix(remove_articles(remove_punc(lower(_coerce_text_target(s)))))
 
 def exact_match_score(prediction, ground_truth):
     return normalize_answer(prediction) == normalize_answer(ground_truth)
@@ -100,13 +126,29 @@ Just return the letters "A" or "B", with no text around it.
     time.sleep(1) # avoid high rate of request
     return llm_score
 
-def test_prediction_acc_LLM_judge(model, tok, hparams, prompts, targets, device, locality=False):
+def test_prediction_acc_LLM_judge(model, tok, hparams, prompts, targets, device, locality=False, metadata=None):
     # generation & truncation
     all_score = []
     all_response = []
     if isinstance(prompts, str):
-        prompts, targets = [prompts, ], [targets, ]
-    for prompt in prompts:
+        prompts = [prompts]
+    else:
+        prompts = list(prompts)
+
+    if isinstance(targets, str) or not isinstance(targets, (list, tuple)):
+        targets = [targets]
+    else:
+        targets = list(targets)
+
+    if len(targets) == 1 and len(prompts) > 1:
+        targets = targets * len(prompts)
+    if len(prompts) != len(targets):
+        raise ValueError(
+            f"Prompt/target count mismatch in LLM-judge evaluation: {len(prompts)} prompts vs {len(targets)} targets"
+        )
+    metadata_rows = _normalize_metadata_list(metadata, len(prompts))
+
+    for prompt, target, metadata_row in zip(prompts, targets, metadata_rows):
         messages = [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt}
@@ -123,7 +165,7 @@ def test_prediction_acc_LLM_judge(model, tok, hparams, prompts, targets, device,
             return_tensors="pt",
         ).to(f"cuda:{device}")
         # add a template
-        gen_tokens = model.generate(
+        generate_kwargs = dict(
             input_ids=prompt_tok['input_ids'],
             attention_mask=prompt_tok['attention_mask'],
             max_new_tokens=512,
@@ -133,6 +175,9 @@ def test_prediction_acc_LLM_judge(model, tok, hparams, prompts, targets, device,
             do_sample=False,
             use_cache=False,
         )
+        if metadata_row is not None and _supports_hopedit_metadata(model):
+            generate_kwargs["metadata"] = metadata_row
+        gen_tokens = model.generate(**generate_kwargs)
         # decode and process
         if isinstance(model, T5ForConditionalGeneration):
             trunc_gen_tokens = gen_tokens[0]  # encoder-decoder model only provied generated content after prompt
@@ -151,12 +196,12 @@ def test_prediction_acc_LLM_judge(model, tok, hparams, prompts, targets, device,
         if hparams.evaluation_type == "generate-text":
             all_response.append(gen_content)
         elif hparams.evaluation_type == "LLM-judge" and hasattr(hparams, 'api_key') and hparams.api_key:
-            LLM_Score = llm_judge(prompts, targets, gen_content, hparams.api_key)
+            LLM_Score = llm_judge(prompt, _coerce_text_target(target), gen_content, hparams.api_key)
             all_score.append(LLM_Score)
             all_response.append(gen_content)
         else:
             # the user do not provide api key, using exact match as an alternative
-            EM_Score = float(exact_match_score(gen_content, targets))
+            EM_Score = float(exact_match_score(gen_content, target))
             all_score.append(EM_Score)
             all_response.append(gen_content)
     
@@ -232,25 +277,33 @@ def test_seq2seq_batch_prediction_acc(model, tok, hparams, prompts, targets, dev
             return answers if type(answers[0]) is list else [answers,]
         return torch.mean((trg_tok['input_ids'][:,:-1] == ans[:,:-1]).float(), dim=-1).detach().cpu().numpy().tolist()
 
-def test_prediction_acc(model, tok, hparams, prompts, targets, device, locality=False, vanilla_generation=False):
+def test_prediction_acc(model, tok, hparams, prompts, targets, device, locality=False, vanilla_generation=False, metadata=None):
     if vanilla_generation:
         if isinstance(prompts, str):
             prompts, targets = [prompts, ], [targets, ]
+        metadata_rows = _normalize_metadata_list(metadata, len(prompts))
         results = []
-        for prompt, target_new in zip(prompts, targets):
+        for prompt, target_new, metadata_row in zip(prompts, targets, metadata_rows):
             target_new_tokens = tok.encode(target_new, add_special_tokens=False)
+            target_len = len(target_new_tokens)
             prompt_tok = tok(
                 prompt,
                 return_tensors="pt",
             ).to(f"cuda:{device}")
-            gen_token = model.generate(
+            generate_kwargs = dict(
                 input_ids=prompt_tok['input_ids'],
                 attention_mask=prompt_tok['attention_mask'],
-                max_new_tokens=len(target_new_tokens),
+                max_new_tokens=max(1, target_len),
                 pad_token_id=tok.eos_token_id,
                 do_sample=False,
                 use_cache=False,
             )
+            if metadata_row is not None and _supports_hopedit_metadata(model):
+                generate_kwargs["metadata"] = metadata_row
+            gen_token = model.generate(**generate_kwargs)
+            if target_len == 0:
+                results.append([] if locality else 0.0)
+                continue
             if locality:
                 results.append(gen_token.detach().cpu().numpy().tolist()[0][-len(target_new_tokens):])
             else:
@@ -287,7 +340,11 @@ def test_prediction_acc(model, tok, hparams, prompts, targets, device, locality=
     num_pad_toks = [int((i == tok.pad_token_id).sum()) for i in prompt_target_tok['input_ids'].cpu()]
     prompt_len = [x+y for x,y in zip(num_pad_toks,num_prompt_toks)]
     with torch.no_grad():
-        outputs = model(**prompt_target_tok)
+        model_kwargs = dict(prompt_target_tok)
+        metadata_rows = _normalize_metadata_list(metadata, len(prompts))
+        if len(metadata_rows) == 1 and metadata_rows[0] is not None and _supports_hopedit_metadata(model):
+            model_kwargs["metadata"] = metadata_rows[0]
+        outputs = model(**model_kwargs)
         if type(outputs) is torch.Tensor:
             logits = outputs
         else:

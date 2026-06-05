@@ -63,15 +63,16 @@ def compute_edit_quality(
 
     rewrite_prompts = record["prompt"]
     rephrase_prompts = record["rephrase_prompt"] if 'rephrase_prompt' in record.keys() else None
+    subject = record.get("subject")
     ret = compute_rewrite_or_rephrase_quality(model, model_name, hparams, tok,
-                                              rewrite_prompts, target_new, device=device, eval_metric=eval_metric)
+                                              rewrite_prompts, target_new, device=device, eval_metric=eval_metric, subject=subject)
 
     ret['locality'] = {}
     ret['portability'] = {}
     if rephrase_prompts is not None:
         ret.update(
             compute_rewrite_or_rephrase_quality(model, model_name, hparams, tok,
-                                                rephrase_prompts, target_new, device=device, test_rephrase=True, eval_metric=eval_metric)
+                                                rephrase_prompts, target_new, device=device, test_rephrase=True, eval_metric=eval_metric, subject=subject)
         )
 
     if 'locality' in record.keys() and any(record['locality']):
@@ -104,22 +105,24 @@ def compute_rewrite_or_rephrase_quality(
     target_new: str,
     device,
     test_rephrase: bool = False,
-    eval_metric: str = 'token_em'
+    eval_metric: str = 'token_em',
+    subject: str | None = None,
 ) -> typing.Dict:
     
     if not test_rephrase:
         key = 'rewrite'
     else:
         key = 'rephrase'
+    metadata = {"prompt": prompt, "subject": subject} if subject is not None else {"prompt": prompt}
     # using real-world evaluation: autoregressive decoding, natural stop criteria, LLM-as-a-Judge
     if hasattr(hparams, 'evaluation_type') and hparams.evaluation_type == "LLM-judge":
-        acc, gen_content = test_prediction_acc_LLM_judge(model, tok, hparams, prompt, target_new, device, locality=False)
+        acc, gen_content = test_prediction_acc_LLM_judge(model, tok, hparams, prompt, target_new, device, locality=False, metadata=metadata)
         ret = {
             f"{key}_acc": acc,
             f"{key}_gen_content": gen_content
         }
     elif hasattr(hparams, 'evaluation_type') and hparams.evaluation_type == "generate-text":
-        gen_content_model = test_prediction_acc_LLM_judge(model, tok, hparams, prompt, target_new, device, locality=False)
+        gen_content_model = test_prediction_acc_LLM_judge(model, tok, hparams, prompt, target_new, device, locality=False, metadata=metadata)
         ret = {
             f"{key}_gen_content": gen_content_model
         }
@@ -139,7 +142,7 @@ def compute_rewrite_or_rephrase_quality(
             if 't5' in model_name.lower():
                 acc = test_seq2seq_batch_prediction_acc(model, tok, hparams, prompt, target_new, device)
             else:
-                acc = test_prediction_acc(model, tok, hparams, prompt, target_new, device, vanilla_generation=True)
+                acc = test_prediction_acc(model, tok, hparams, prompt, target_new, device, vanilla_generation=True, metadata=metadata)
             f1 = F1(model,tok,hparams,prompt,target_new,device, vanilla_generation=True)
             ret = {
                 f"{key}_acc": acc,
@@ -150,7 +153,7 @@ def compute_rewrite_or_rephrase_quality(
             if 't5' in model_name.lower():
                 acc = test_seq2seq_batch_prediction_acc(model, tok, hparams, prompt, target_new, device)
             else:
-                acc = test_prediction_acc(model, tok, hparams, prompt, target_new, device)
+                acc = test_prediction_acc(model, tok, hparams, prompt, target_new, device, metadata=metadata)
             ret = {
                 f"{key}_acc": acc
             }

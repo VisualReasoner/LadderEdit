@@ -8,6 +8,32 @@ from .lora_hparams import LoRAHyperParams
 from .lora_multimodal_hparams import LoRAMultimodalHyperParams
 
 
+def merge_lora_weights_with_interpolation(
+        base_model: AutoModelForCausalLM,
+        base_state_dict: Dict[str, torch.Tensor],
+        peft_model,
+        alpha: float = 0.25,
+) -> AutoModelForCausalLM:
+    """WikiBigEdit-style LoRA-Merge: merge adapter weights, then interpolate."""
+    if not (0.0 <= alpha <= 1.0):
+        raise ValueError("merge_alpha must be between 0.0 and 1.0")
+
+    peft_model.merge_and_unload()
+    adapted_state_dict = {k: v.detach().to("cpu") for k, v in peft_model.state_dict().items()}
+    interpolated_state_dict = {}
+    target_tokens = ("q_proj", "v_proj")
+    for key, base_param in base_state_dict.items():
+        if not any(token in key for token in target_tokens):
+            continue
+        adapted_key = f"base_model.model.{key}"
+        adapted_param = adapted_state_dict.get(adapted_key, adapted_state_dict.get(key))
+        if adapted_param is None:
+            continue
+        interpolated_state_dict[key] = (1 - alpha) * base_param + alpha * adapted_param
+    base_model.load_state_dict(interpolated_state_dict, strict=False)
+    return base_model
+
+
 def apply_lora_to_model(
         model: AutoModelForCausalLM,
         tok: AutoTokenizer,
@@ -55,7 +81,10 @@ def execute_lora(
         Config = AdaLoraConfig
     else:
         raise NotImplementedError
-    if not keep_original_weight and hasattr(model,'peft_config'):
+    base_state_dict = None
+    if hparams.merge:
+        base_state_dict = {k: v.detach().to("cpu") for k, v in model.state_dict().items()}
+    if not keep_original_weight and hasattr(model,'peft_config') and not hparams.merge:
         peft_model = model
     else:
         peft_config = Config(
@@ -169,6 +198,13 @@ def execute_lora(
 
         # if loss_meter.avg < 1e-3:
         #     break
+    if hparams.merge:
+        return merge_lora_weights_with_interpolation(
+            model,
+            base_state_dict,
+            peft_model,
+            alpha=hparams.merge_alpha,
+        )
     return peft_model
 
 

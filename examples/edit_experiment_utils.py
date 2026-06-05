@@ -6,6 +6,7 @@ from typing import Any
 
 METHOD_HPARAMS = {
     'ALPHAEDIT': ('easyeditor.models.alphaedit', 'AlphaEditHyperParams'),
+    'DEFER': ('easyeditor.models.defer', 'DeferHyperParams'),
     'FT': ('easyeditor.models.ft', 'FTHyperParams'),
     'GRACE': ('easyeditor.models.grace', 'GraceHyperParams'),
     'HOPEDIT': ('easyeditor.models.hopedit', 'HopEditHyperParams'),
@@ -55,18 +56,46 @@ DATASET_CANDIDATES = {
     'ZsRE': [
         'ZsRE/zsre_mend_edit.json',
         'zsre/zsre_mend_edit.json',
+        'ZsRE/zsre_mend_train.json',
+        'zsre/zsre_mend_train.json',
+        'ZsRE/zsre_mend_train_10000.json',
+        'zsre/zsre_mend_train_10000.json',
+        'ZsRE/zsre_mend_eval.json',
+        'zsre/zsre_mend_eval.json',
+        'zsre_mend_train.json',
+        'zsre_mend_train_10000.json',
+        'zsre_mend_eval.json',
     ],
     'CounterFact': [
         'counterfact/counterfact-edit.json',
         'CounterFact/counterfact-edit.json',
         'counterfact.json',
         'counterfact/counterfact.json',
+        'CounterFact/counterfact.json',
     ],
     'WikiBigEdit': [
         'wikibigedit_eval_17k.json',
         'WikiBigEdit/wikibigedit_eval_17k.json',
         'wikibigedit/wikibigedit_eval_17k.json',
         'wikibigedit.json',
+    ],
+    'Hallucination': [
+        'hallucination/hallucination-edit.json',
+        'Hallucination/hallucination-edit.json',
+        'hallucination/hallucination-edit.csv',
+        'Hallucination/hallucination-edit.csv',
+        'hallucination/hallucination.csv',
+        'Hallucination/hallucination.csv',
+        'HalluEditBench/hallucination-edit.csv',
+        'HalluEditBench/hallucination.csv',
+    ],
+    'MQuAKE': [
+        'MQuAKE/MQuAKE-CF.json',
+        'mquake/MQuAKE-CF.json',
+        'MQuAKE/MQuAKE.json',
+        'mquake/MQuAKE.json',
+        'MQuAKE-CF.json',
+        'MQuAKE.json',
     ],
 }
 
@@ -115,10 +144,20 @@ def _first_or_none(value: Any):
 
 def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices: list[int] | None = None, data_file: str | None = None):
     dataset_file = resolve_dataset_file(data_dir, data_type, data_file=data_file)
-    payload = json.loads(dataset_file.read_text())
+    if data_type == 'Hallucination' and dataset_file.suffix.lower() == '.csv':
+        try:
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - dependency should exist in runtime env
+            raise ImportError('pandas is required to load Hallucination CSV files') from exc
+        payload = pd.read_csv(dataset_file).to_dict(orient='records')
+    else:
+        payload = json.loads(dataset_file.read_text())
     if indices is not None:
         selected = [payload[idx] for idx in indices]
         source_indices = list(indices)
+    elif ds_size is None or int(ds_size) <= 0:
+        selected = payload
+        source_indices = list(range(len(payload)))
     else:
         selected = payload[:ds_size]
         source_indices = list(range(min(ds_size, len(payload))))
@@ -143,6 +182,7 @@ def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices
         if data_type == 'CounterFact':
             rewrite = item.get('requested_rewrite', {})
             subject = rewrite.get('subject') or item.get('subject')
+            relation_id = rewrite.get('relation_id') or item.get('relation_id') or rewrite.get('relation') or item.get('relation')
             prompt_template = rewrite.get('prompt') or item.get('prompt')
             if prompt_template is None:
                 raise KeyError(f'CounterFact record {source_index} is missing a prompt')
@@ -155,11 +195,18 @@ def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices
             locality_ground_truth = None
             if locality_prompt is not None:
                 locality_ground_truth = [ground_truth] * len(locality_prompt)
+            paraphrases = item.get('paraphrase_prompts')
+            if not isinstance(paraphrases, list):
+                paraphrases = [] if paraphrases is None else [paraphrases]
+            address_rephrase_prompt = paraphrases[0] if paraphrases else None
+            eval_rephrase_prompt = paraphrases[1] if len(paraphrases) > 1 else address_rephrase_prompt
             records.append({
                 'source_index': source_index,
+                'relation_id': relation_id,
                 'prompt': prompt,
                 'subject': subject,
-                'rephrase_prompt': _first_or_none(item.get('paraphrase_prompts')),
+                'address_rephrase_prompt': address_rephrase_prompt,
+                'rephrase_prompt': eval_rephrase_prompt,
                 'target_new': target_new,
                 'ground_truth': ground_truth,
                 'locality_prompt': locality_prompt,
@@ -212,6 +259,96 @@ def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices
             })
             continue
 
+        if data_type == 'Hallucination':
+            prompt = (
+                item.get('prompt')
+                or item.get('efficacy', {}).get('prompt')
+                or item.get('question')
+            )
+            subject = item.get('subject')
+            relation = item.get('relation')
+            if prompt is None and subject is not None and relation is not None:
+                prompt = f'What is the {relation} of {subject}?'
+            if prompt is None:
+                raise KeyError(f'Hallucination record {source_index} is missing a prompt')
+            target_new = _string_target(
+                item.get('target_new')
+                or item.get('object')
+                or item.get('ground_truth')
+                or item.get('efficacy', {}).get('ground_truth')
+            )
+            if target_new is None:
+                raise KeyError(f'Hallucination record {source_index} is missing a target')
+
+            generalization = item.get('generalization') or {}
+            portability = item.get('portability') or {}
+            locality_bucket = item.get('locality') or {}
+            locality_prompt = locality_bucket.get('prompt') or item.get('locality_prompt')
+            locality_ground_truth = locality_bucket.get('ground_truth') or item.get('locality_ground_truth')
+
+            normalized_portability = {}
+            for key, bucket in portability.items():
+                if not isinstance(bucket, dict):
+                    continue
+                bucket_prompt = bucket.get('prompt')
+                bucket_ground_truth = bucket.get('ground_truth')
+                if bucket_prompt is None or bucket_ground_truth is None:
+                    continue
+                if not isinstance(bucket_prompt, list):
+                    bucket_prompt = [bucket_prompt]
+                if not isinstance(bucket_ground_truth, list):
+                    bucket_ground_truth = [bucket_ground_truth]
+                normalized_portability[key] = {
+                    'prompt': bucket_prompt,
+                    'ground_truth': bucket_ground_truth,
+                }
+
+            records.append({
+                'source_index': source_index,
+                'prompt': prompt,
+                'subject': subject,
+                'rephrase_prompt': (
+                    generalization.get('rephrase', {}).get('prompt')
+                    or item.get('rephrase')
+                    or item.get('ood_rephrase')
+                ),
+                'target_new': target_new,
+                'ground_truth': _string_target(item.get('ground_truth')) or '<|endoftext|>',
+                'locality_prompt': locality_prompt,
+                'locality_ground_truth': locality_ground_truth,
+                'portability': normalized_portability if normalized_portability else None,
+            })
+            continue
+
+        if data_type == 'MQuAKE':
+            rewrites = item.get('requested_rewrite') or []
+            if not rewrites:
+                raise KeyError(f'MQuAKE record {source_index} is missing requested_rewrite')
+            prompt = ''.join(
+                f"{rewrite['prompt'].format(rewrite['subject'])}?"
+                for rewrite in rewrites
+            )
+            subject = ','.join(rewrite['subject'] for rewrite in rewrites)
+            target_new = ','.join(_string_target(rewrite.get('target_new')) for rewrite in rewrites)
+            rephrase_prompt = ''.join(rewrite.get('question', '') for rewrite in rewrites)
+            portability_prompts = item.get('questions') or []
+            new_answer = item.get('new_answer')
+            records.append({
+                'source_index': source_index,
+                'prompt': prompt,
+                'subject': subject,
+                'rephrase_prompt': rephrase_prompt or None,
+                'target_new': target_new,
+                'ground_truth': '<|endoftext|>',
+                'portability': {
+                    'ood': {
+                        'prompt': portability_prompts,
+                        'ground_truth': [_string_target(new_answer)] * len(portability_prompts),
+                    }
+                } if portability_prompts and new_answer is not None else None,
+            })
+            continue
+
         raise NotImplementedError(f'Unsupported data_type: {data_type}')
 
     return records, dataset_file
@@ -220,11 +357,15 @@ def load_normalized_records(data_dir: str, data_type: str, ds_size: int, indices
 def build_editor_inputs(records: list[dict[str, Any]], data_type: str):
     prompts = [record['prompt'] for record in records]
     subject = [record['subject'] for record in records]
+    source_index = [record.get('source_index') for record in records]
+    relation_id = [record.get('relation_id') for record in records]
     target_new = [record['target_new'] for record in records]
     ground_truth = [record['ground_truth'] for record in records]
 
     rephrase_values = [record.get('rephrase_prompt') for record in records]
     rephrase_prompts = rephrase_values if any(value is not None for value in rephrase_values) else None
+    address_rephrase_values = [record.get('address_rephrase_prompt') for record in records]
+    address_rephrase_prompts = address_rephrase_values if any(value is not None for value in address_rephrase_values) else None
 
     locality_inputs = None
     if any(record.get('locality') for record in records):
@@ -300,12 +441,19 @@ def build_editor_inputs(records: list[dict[str, Any]], data_type: str):
     eval_metric = 'token_em'
     if data_type == 'ZsRE':
         eval_metric = 'token em'
+    elif data_type == 'Hallucination':
+        eval_metric = 'ppl'
+    elif data_type == 'MQuAKE':
+        eval_metric = 'ood_ppl'
     return {
         'prompts': prompts,
         'subject': subject,
+        'source_index': source_index,
+        'relation_id': relation_id,
         'target_new': target_new,
         'ground_truth': ground_truth,
         'rephrase_prompts': rephrase_prompts,
+        'address_rephrase_prompts': address_rephrase_prompts,
         'locality_inputs': locality_inputs,
         'portability_inputs': portability_inputs,
         'loc_prompts': loc_prompts,
@@ -352,19 +500,55 @@ def mean_optional(values: list[float | None]) -> float | None:
     return float(sum(filtered) / len(filtered))
 
 
+def _normalize_family_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def infer_family_bucket(record: dict[str, Any], data_type: str, subject_counts: dict[str, int]) -> str:
+    prompt = _normalize_family_text(record.get("prompt"))
+    subject = _normalize_family_text(record.get("subject"))
+    if data_type == "CounterFact":
+        if "twin city" in prompt:
+            return "twin_city"
+        relation_phrases = [
+            "created by",
+            "developed by",
+            "directed by",
+            ", created by",
+            ", developed by",
+            ", directed by",
+        ]
+        if any(phrase in prompt for phrase in relation_phrases):
+            return "created_developed_directed"
+        return "other"
+    if data_type == "ZsRE":
+        if subject and subject_counts.get(subject, 0) >= 2:
+            return "same_subject_multi_edit"
+        return "other"
+    return "other"
+
+
 def summarize_run(metrics: list[dict[str, Any]], records: list[dict[str, Any]], run_config: dict[str, Any], memory_snapshot: list[dict[str, Any]] | None = None):
+    subject_counts: dict[str, int] = {}
+    for record in records:
+        subject = _normalize_family_text(record.get('subject'))
+        if subject:
+            subject_counts[subject] = subject_counts.get(subject, 0) + 1
     per_case = []
     for idx, metric in enumerate(metrics):
         request = metric.get('requested_rewrite', {})
         record = records[idx] if idx < len(records) else {}
+        family_bucket = infer_family_bucket(record, run_config['data_type'], subject_counts)
         pre = metric.get('pre', {})
         post = metric.get('post', {})
         row = {
             'case_id': metric.get('case_id', idx),
             'source_index': record.get('source_index', idx),
+            'relation_id': request.get('relation_id', record.get('relation_id')),
             'subject': request.get('subject', record.get('subject')),
             'prompt': request.get('prompt', record.get('prompt')),
             'target_new': request.get('target_new', record.get('target_new')),
+            'family_bucket': family_bucket,
             'pre_rewrite_acc': metric_mean(pre.get('rewrite_acc')),
             'post_rewrite_acc': metric_mean(post.get('rewrite_acc')),
             'pre_rephrase_acc': metric_mean(pre.get('rephrase_acc')),
@@ -414,6 +598,19 @@ def summarize_run(metrics: list[dict[str, Any]], records: list[dict[str, Any]], 
         'memory_entries_per_edit': None if num_cases == 0 else float(memory_entries_final / num_cases),
         'per_case': per_case,
     }
+    family_buckets: dict[str, dict[str, Any]] = {}
+    bucket_names = sorted({row['family_bucket'] for row in per_case})
+    for bucket_name in bucket_names:
+        rows = [row for row in per_case if row['family_bucket'] == bucket_name]
+        family_buckets[bucket_name] = {
+            'count': len(rows),
+            'post_rewrite_mean': mean_optional([row['post_rewrite_acc'] for row in rows]),
+            'post_rephrase_mean': mean_optional([row['post_rephrase_acc'] for row in rows]),
+            'post_locality_mean': mean_optional([row['post_locality_acc'] for row in rows]),
+            'rewrite_delta_mean': mean_optional([row['rewrite_delta'] for row in rows]),
+            'rephrase_delta_mean': mean_optional([row['rephrase_delta'] for row in rows]),
+        }
+    summary['family_buckets'] = family_buckets
     return summary
 
 

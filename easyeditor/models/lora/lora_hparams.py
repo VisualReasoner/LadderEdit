@@ -28,6 +28,10 @@ class LoRAHyperParams(HyperParams):
     batch_size: int = 128
     max_length: int = 40
     model_parallel: bool = False
+    # WikiBigEdit LoRA-Merge compatibility. When enabled, each trained LoRA
+    # adapter is merged back into the base weights with interpolation.
+    merge: bool = False
+    merge_alpha: float = 0.25
     @classmethod
     def from_hparams(cls, hparams_name_or_path: str):
         if '.yaml' not in hparams_name_or_path:

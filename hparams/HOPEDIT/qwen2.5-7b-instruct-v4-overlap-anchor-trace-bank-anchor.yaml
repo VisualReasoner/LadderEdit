@@ -1,0 +1,113 @@
+alg_name: HOPEDIT
+model_name: Qwen/Qwen2.5-7B-Instruct
+device: 0
+model_parallel: false
+batch_size: 1
+max_length: 512
+use_chat_template: false
+fp16: false
+bf16: true
+
+rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+num_steps: 4
+lr: 5.0e-4
+weight_decay: 0.0
+
+top_k: 4
+beta: 8.0
+semantic_weight: 0.7
+activation_weight: 0.3
+probe_layer: 16
+probe_layers:
+  - 12
+  - 16
+  - 20
+route_log_dir: ./outputs/hopedit_v42_overlap_anchor_trace_bank_anchor
+route_strategy: multiview
+min_route_prob: 0.0
+min_route_margin: 0.0
+fallback_min_route_prob: 0.0
+fallback_min_route_margin: 0.0
+activation_center: true
+activation_whiten: true
+key_l2_normalize: true
+use_rephrase_prompt: true
+use_subject_prompt: true
+negative_top_k: 2
+negative_weight: 0.5
+negative_margin: 0.20
+negative_min_conflict: 0.45
+log_training_loss: true
+loss_log_every: 1
+save_path: null
+
+hopedit_mode: v4_overlap_aware_anchor_trace_bank
+
+address_encoder_impl: deterministic_topk
+address_num_atoms: 512
+address_code_topk: 4
+address_candidate_budget: 128
+address_atom_merge_threshold: 0.92
+address_code_min_affinity: 1.0e-6
+address_coherence_penalty: 0.05
+trace_energy_beta: 12.0
+trace_energy_temperature: 1.0
+trace_abstain_margin: 0.03
+trace_abstain_min_energy: 0.10
+trace_family_budget: 8
+trace_family_boost: 0.35
+trace_anchor_weight: 0.25
+trace_anchor_energy_floor: 0.05
+trace_family_negative_topk: 8
+trace_irrelevant_negative_topk: 4
+trace_family_margin_scale: 0.60
+trace_anchor_margin_scale: 0.60
+trace_value_cache_size: 8
+
+state_slot_capacity: 4
+slot_rank: 4
+state_basis_rank: 4
+slot_realization_impl: concatenated_lora
+slot_topk: 2
+atom_sparse_topk: 1
+atom_write_topk: 1
+atom_coherence_penalty: 0.25
+atom_support_exclusivity_penalty: 0.75
+atom_sparse_ridge: 1.0e-4
+atom_sparse_min_abs_affinity: 1.0e-6
+slot_activation_min_weight: 0.15
+state_finalist_margin: 0.05
+locality_risk_threshold: 0.35
+
+state_gate_enable: false
+state_gate_model: logistic
+state_gate_warm_start_from_replay: false
+state_gate_replay_buffer_size: 4096
+state_gate_online_update_interval: 16
+state_gate_lr: 1.0e-2
+state_gate_batch_size: 128
+state_gate_warm_start_epochs: 8
+state_gate_direct_threshold: 0.70
+state_gate_promotion_threshold: 0.80
+state_gate_merge_threshold: 0.75
+
+memory_tier_warmup_edits: 512
+stability_min_observations: 8
+stability_max_cross_view_gap: 0.10
+stability_max_prototype_dispersion: 0.30
+stability_max_within_state_conflict: 0.30
+stability_min_locality: 0.95
+consolidation_interval_edits: 32
+consolidation_max_pairs_per_pass: 8
+hierarchy_enable: false
+hierarchy_start_edit: 1000
+bucket_topk: 2
+bucket_max_size: 256
+bucket_split_dispersion: 0.35

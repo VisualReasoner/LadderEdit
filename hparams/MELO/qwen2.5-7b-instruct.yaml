@@ -1,0 +1,60 @@
+# Best-effort same-backbone MELO configuration for fair CF/ZsRE comparisons.
+# The official MELO checkout only ships GPT-2/T5-style configs; this mirrors
+# the method structure on Qwen so failures are method/config compatibility
+# failures rather than missing local model-path failures.
+alg_name: MELO
+model_name: "Qwen/Qwen2.5-7B-Instruct"
+model_parallel: false
+device: 0
+max_length: 128
+
+task: hall
+lora_task_type: CAUSAL_LM
+check_dir: null
+
+grace:
+  name: grace
+  num_iter: 20
+  init_radius: 0.5
+  dist_fn: euc
+  val_init: cold
+  val_train: sgd
+  val_reg: None
+  reg: early_stop
+  replacement: replace_prompt
+  expand_mode: moving_avg
+  num_pert: 8
+  key_id: -1
+  num_edit_per_block: 4
+  num_block: 64
+  num_rank_per_block: 2
+  metric_period: 400
+  edit_lr: 0.001
+model:
+  name: "Qwen/Qwen2.5-7B-Instruct"
+  class_name: AutoModelForCausalLM
+  tokenizer_class: AutoTokenizer
+  tokenizer_name: "Qwen/Qwen2.5-7B-Instruct"
+  fan_in_fan_out: false
+  target_modules:
+    - q_proj
+    - v_proj
+  pt: null
+  grace_layer: model.layers.27.mlp.down_proj
+lora:
+  cls_name: "Qwen/Qwen2.5-7B-Instruct"
+  cls_class: AutoModel
+  supervised: true
+  cos: false
+  freeze: null
+  square: true
+  bound_embeds: false
+  use_all_negatives: false
+  freeze_lora: false
+  dist_heads: 1
+  cross_attend: false
+  soft_weighting: false
+  checkpoint_grad: false
+  lora_r: 64
+  lora_alpha: 64
+  lora_dropout: 0.0

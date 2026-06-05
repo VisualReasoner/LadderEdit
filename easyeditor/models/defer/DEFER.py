@@ -126,5 +126,9 @@ class DeferAdaptor(torch.nn.Module):
         if self.training:
             layer_out = defer*values.unsqueeze(1).repeat_interleave(layer_out.shape[1], 1) + (1-defer)*layer_out
         else:
-            layer_out = torch.where((defer >= self.threshold), values, layer_out)
+            layer_out = torch.where(
+                (defer >= self.threshold).view(-1, 1, 1),
+                values.unsqueeze(1).expand_as(layer_out),
+                layer_out,
+            )
         return layer_out
